@@ -14,6 +14,8 @@
 
 mod utils;
 
+use docx_rust::app::App;
+use docx_rust::core::Core;
 use docx_rust::document::BodyContent::{Paragraph, Sdt, SectionProperty, Table, TableCell};
 use docx_rust::document::{ParagraphContent, RunContent, TableCellContent, TableRowContent};
 use docx_rust::formatting::{NumberFormat, OnOffOnlyType, ParagraphProperty};
@@ -23,6 +25,8 @@ use docx_rust::DocxFile;
 use serde::Serialize;
 use serde_json;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Seek};
 use std::path::Path;
 use std::str::FromStr;
 use utils::{max_lengths_per_column, save_image_to_file, serialize_images, table_row_to_markdown};
@@ -393,18 +397,24 @@ impl MarkdownParagraph {
                             RunContent::Drawing(drawing) => {
                                 if let Some(inline) = &drawing.inline {
                                     if let Some(graphic) = &inline.graphic {
-                                        let id = graphic.data.pic.fill.blip.embed.to_string();
-                                        if let Some(relationships) = &docx.document_rels {
-                                            if let Some(target) = relationships.get_target(&id) {
-                                                let descr = match &inline.doc_property.descr {
-                                                    Some(descr) => descr.to_string(),
-                                                    None => "".to_string(),
-                                                };
-                                                let img_text =
-                                                    format!("![{}](./{})", descr, target);
-                                                let text_block =
-                                                    TextBlock::new(img_text, None, TextType::Image);
-                                                markdown_paragraph.blocks.push(text_block);
+                                        if let Some(pic) = graphic.data.children.first() {
+                                            let id = pic.fill.blip.embed.to_string();
+                                            if let Some(relationships) = &docx.document_rels {
+                                                if let Some(target) = relationships.get_target(&id)
+                                                {
+                                                    let descr = match &inline.doc_property.descr {
+                                                        Some(descr) => descr.to_string(),
+                                                        None => "".to_string(),
+                                                    };
+                                                    let img_text =
+                                                        format!("![{}](./{})", descr, target);
+                                                    let text_block = TextBlock::new(
+                                                        img_text,
+                                                        None,
+                                                        TextType::Image,
+                                                    );
+                                                    markdown_paragraph.blocks.push(text_block);
+                                                }
                                             }
                                         }
                                     }
@@ -415,7 +425,7 @@ impl MarkdownParagraph {
                     }
                 }
                 ParagraphContent::Link(link) => {
-                    let descr = link.content.content.first();
+                    let descr = link.content.as_ref().and_then(|run| run.content.first());
                     let target = match &link.anchor {
                         Some(anchor) => Some(format!("#{}", anchor.to_string())),
                         None => match &link.id {
@@ -495,10 +505,19 @@ impl MarkdownDocument {
         }
     }
 
+    #[inline]
     pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(err) => panic!("Error opening file: {:?}", err),
+        };
+        Self::from_reader(file)
+    }
+
+    pub fn from_reader<T: Read + Seek>(reader: T) -> Self {
         let mut markdown_doc = MarkdownDocument::new();
 
-        let docx = match DocxFile::from_file(path) {
+        let docx = match DocxFile::from_reader(reader) {
             Ok(docx_file) => docx_file,
             Err(err) => {
                 panic!("Error processing file: {:?}", err)
@@ -514,44 +533,59 @@ impl MarkdownDocument {
         // println!("{:?}", &docx);
 
         if let Some(app) = &docx.app {
-            if let Some(company) = &app.company {
+            let company = match app {
+                App::AppNoApNamespace(app) => &app.company,
+                App::AppWithApNamespace(app) => &app.company,
+            };
+            if let Some(company) = company {
                 if !company.is_empty() {
                     markdown_doc.company = Some(company.to_string());
                 }
             }
         }
 
-        if let Some(core) = &docx.core {
-            if let Some(title) = &core.title {
-                if !title.is_empty() {
-                    markdown_doc.title = Some(title.to_string());
+        macro_rules! fill_core {
+            ($core:expr) => {
+                if let Some(title) = &$core.title {
+                    if !title.is_empty() {
+                        markdown_doc.title = Some(title.to_string());
+                    }
                 }
-            }
-            if let Some(subject) = &core.subject {
-                if !subject.is_empty() {
-                    markdown_doc.subject = Some(subject.to_string());
+                if let Some(subject) = &$core.subject {
+                    if !subject.is_empty() {
+                        markdown_doc.subject = Some(subject.to_string());
+                    }
                 }
-            }
-            if let Some(keywords) = &core.keywords {
-                if !keywords.is_empty() {
-                    markdown_doc.keywords = Some(keywords.to_string());
+                if let Some(keywords) = &$core.keywords {
+                    if !keywords.is_empty() {
+                        markdown_doc.keywords = Some(keywords.to_string());
+                    }
                 }
-            }
-            if let Some(description) = &core.description {
-                if !description.is_empty() {
-                    markdown_doc.description = Some(description.to_string());
+                if let Some(description) = &$core.description {
+                    if !description.is_empty() {
+                        markdown_doc.description = Some(description.to_string());
+                    }
                 }
-            }
-            if let Some(creator) = &core.creator {
-                if !creator.is_empty() {
-                    markdown_doc.creator = Some(creator.to_string());
+                if let Some(creator) = &$core.creator {
+                    if !creator.is_empty() {
+                        markdown_doc.creator = Some(creator.to_string());
+                    }
                 }
-            }
-            if let Some(last_modified_by) = &core.last_modified_by {
-                if !last_modified_by.is_empty() {
-                    markdown_doc.last_editor = Some(last_modified_by.to_string());
+                if let Some(last_modified_by) = &$core.last_modified_by {
+                    if !last_modified_by.is_empty() {
+                        markdown_doc.last_editor = Some(last_modified_by.to_string());
+                    }
                 }
+            };
+        }
+        match &docx.core {
+            Some(Core::CoreNamespace(core)) => {
+                fill_core!(core);
             }
+            Some(Core::CoreNoNamespace(core)) => {
+                fill_core!(core);
+            }
+            None => {}
         }
 
         if let Some(numbering) = &docx.numbering {
@@ -570,7 +604,8 @@ impl MarkdownDocument {
                                 level_text: details.levels[0]
                                     .level_text
                                     .as_ref()
-                                    .map(|i| i.value.to_string()),
+                                    .and_then(|i| i.value.as_ref())
+                                    .map(|v| v.to_string()),
                             },
                         );
                         ()
@@ -661,6 +696,7 @@ impl MarkdownDocument {
                 TableCell(tc) => {
                     println!("TableCell: {:?}", tc);
                 }
+                _ => {}
             }
         }
 

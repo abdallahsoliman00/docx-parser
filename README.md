@@ -1,4 +1,4 @@
-# DOXC-PARSER
+# DOCX-PARSER
 
 This package uses the [docx-rs](https://crates.io/crates/docx-rust) crate to parse docx files. It subsequently converts the parsed docx file into Markdown format. Alternatively, it can also be used to convert docx files into JSON format, where only the structure relevant for creating Markdown documents is kept.
 
